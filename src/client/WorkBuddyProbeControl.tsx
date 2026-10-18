@@ -516,7 +516,11 @@ function ModelProbe({ model, card, label, t }: {
   // lacks the field) keeps today's behaviour. When off, the refresh button
   // goes with the badge: a balance the card does not show needs no re-read,
   // and the seat keeps only the probe entry.
-  const quickView = status?.showBalanceQuickView !== false
+  // Narrow to the signed-in variant first: `showBalanceQuickView` lives only
+  // on that branch of the document union, so reading it through the union is
+  // a type error rather than an `undefined`.
+  const signedIn = status?.status === 'signed-in' ? status : undefined
+  const quickView = signedIn?.showBalanceQuickView !== false
   const credit = !quickView || creditFailed ? undefined : creditBadge(status, card, t)
 
   const text = tooltipText(t, model, { busy, result, failed })
