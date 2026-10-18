@@ -197,3 +197,33 @@ describe('maximum-context preference capability', () => {
     expect(document).toHaveProperty('probe')
   })
 })
+
+describe('balance quick-view preference', () => {
+  /**
+   * Unlike the maximum-context field, the quick view is a preference rather
+   * than a capability: the document carries the field unless the preference is
+   * *explicitly* off, so a host that never answers (older plugin, headless
+   * caller) leaves the card's default-on rendering untouched. Presence, not
+   * value, is what the card reads.
+   */
+  it('writes the field when the getter answers true', async () => {
+    const port = await startStatusServer({ showBalanceQuickView: () => true })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: '127.0.0.1' } })
+    expect(JSON.parse(response.body)).toHaveProperty('showBalanceQuickView', true)
+  })
+
+  it('omits the field when the getter answers false', async () => {
+    const port = await startStatusServer({ showBalanceQuickView: () => false })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: '127.0.0.1' } })
+    const document = JSON.parse(response.body) as Record<string, unknown>
+    expect(document).not.toHaveProperty('showBalanceQuickView')
+    // The rest of the document survives the omission: only the quick view goes.
+    expect(document).toHaveProperty('status')
+  })
+
+  it('writes the field when there is no getter at all (older host)', async () => {
+    const port = await startStatusServer()
+    const response = await requestOnce({ port, method: 'GET', headers: { host: '127.0.0.1' } })
+    expect(JSON.parse(response.body)).toHaveProperty('showBalanceQuickView', true)
+  })
+})

@@ -303,6 +303,14 @@ export type WorkBuddyWebStatus =
     probe?: WorkBuddyWebProbeSection
     /** International-card preference selecting larger declared context windows. */
     useMaximumContextWindow?: boolean
+    /**
+     * Whether the composer seat shows the remaining-credit quick view. The
+     * field's *absence* means off: presence semantics follow
+     * `useMaximumContextWindow`, so a document from an older host (or one
+     * that failed to load) simply keeps the card's built-in default — on —
+     * rather than hiding a feature the user never turned off.
+     */
+    showBalanceQuickView?: boolean
     /** Per-account hidden-model state for the card's visibility controls. */
     visibility?: WorkBuddyWebVisibilitySection
     /**

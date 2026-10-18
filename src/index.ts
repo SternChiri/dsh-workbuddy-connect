@@ -237,6 +237,12 @@ export interface Config {
   probeConsent?: boolean
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean
+  /**
+   * Whether the composer seat shows the remaining-credit quick view (balance
+   * badge and its refresh button). Off is a real user preference, not an
+   * error state, so it defaults on and only an explicit `false` hides it.
+   */
+  showBalanceQuickView?: boolean
 }
 
 /** Explicit CN desktop auth-file path (shared by the plugin schema and its section). */
@@ -248,12 +254,16 @@ const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
 const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
+/** Balance quick-view preference (shared by the plugin schema and its section). */
+const SHOW_BALANCE_QUICK_VIEW_FIELD = z.boolean().default(true)
+  .description('Show the remaining-credit quick view beside the composer model selector (on by default)')
 
 export const Config: z<Config> = z.object({
   authFile: AUTH_FILE_FIELD,
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+  showBalanceQuickView: SHOW_BALANCE_QUICK_VIEW_FIELD,
 })
 
 /**
@@ -778,6 +788,11 @@ export function apply(ctx: Context, config: Config): void {
             ? undefined
             : { account, disabled: runtime.visibilityStore.disabled(account) }
         },
+        // Only an explicit `false` hides the quick view: `undefined` (a host
+        // that could not load the document yet) and `true` both keep it on,
+        // and the field's presence in the status document is the card's
+        // default-on signal.
+        showBalanceQuickView: () => current().showBalanceQuickView !== false,
         ...runtime.variant.id === CN_VARIANT.id ? {} : {
           // Presence of this field in the document is the card's capability
           // signal, so the getter answers `undefined` — not merely `false` —

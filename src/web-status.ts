@@ -46,6 +46,15 @@ export interface WorkBuddyStatusRouteOptions {
    */
   useMaximumContextWindow?: () => boolean | undefined
   /**
+   * Whether the card should render the remaining-credit quick view (the
+   * balance badge and its refresh button). Unlike `useMaximumContextWindow`,
+   * this is a preference rather than a capability a host might lack, so the
+   * getter is expected to answer a value: only `false` leaves the field out
+   * of the document, and an absent getter (tests, headless callers) keeps
+   * the card's default-on rendering untouched.
+   */
+  showBalanceQuickView?: () => boolean
+  /**
    * Per-account hidden-model state for the card's visibility controls.
    * Undefined when the caller offers none (tests, headless profiles); a
    * defined getter may still answer undefined — a signed-in account without a
@@ -181,9 +190,16 @@ export async function workBuddyWebStatus(
   // section's presence.
   const visibility = deps.visibility?.()
   const withVisibility: WorkBuddyWebStatus = visibility === undefined ? withCatalog : { ...withCatalog, visibility }
+  // The quick view is a preference, not a capability: only an explicit `false`
+  // removes the field. `undefined` (a caller without a getter) and `true` both
+  // write it, so a card whose document failed to load still shows the badge —
+  // the field's presence, not its value, is what the card reads.
+  const withQuickView: WorkBuddyWebStatus = deps.showBalanceQuickView?.() === false
+    ? withVisibility
+    : { ...withVisibility, showBalanceQuickView: true }
   const statusWithModels: WorkBuddyWebStatus = modelsField.length > 0
-    ? { ...withVisibility, models: modelsField }
-    : withVisibility
+    ? { ...withQuickView, models: modelsField }
+    : withQuickView
   // Probe state rides the signed-in document so the card can render the
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the
