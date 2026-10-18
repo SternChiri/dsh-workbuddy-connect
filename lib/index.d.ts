@@ -1711,6 +1711,12 @@ interface Config {
   probeConsent?: boolean;
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean;
+  /**
+   * Whether the composer seat shows the remaining-credit quick view (balance
+   * badge and its refresh button). Off is a real user preference, not an
+   * error state, so it defaults on and only an explicit `false` hides it.
+   */
+  showBalanceQuickView?: boolean;
 }
 declare const Config: z<Config>;
 /**
