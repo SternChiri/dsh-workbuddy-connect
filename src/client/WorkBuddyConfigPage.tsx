@@ -7,6 +7,7 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 // import would fail the client bundle-purity gate.
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import { CARD_VARIANTS, WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
+import { WorkBuddyQuickViewSection } from './WorkBuddyQuickViewSection.tsx'
 
 /** Props the Plugins page delivers to the bundle's configuration entry. */
 export type WorkBuddyConfigPageProps =
@@ -29,7 +30,8 @@ const pageStyle: CSSProperties = {
 }
 
 /**
- * Render the bundle's configuration: one status card per WorkBuddy variant.
+ * Render the bundle's configuration: the quick-view preference, then one
+ * status card per WorkBuddy variant.
  *
  * Both variants share one page. DSH 0.1.6 replaced the settings section's
  * keyed `settings.plugin.item` slot — dispatched once per served settings
@@ -39,6 +41,10 @@ const pageStyle: CSSProperties = {
  * stacked here instead of being dispatched separately. (The 0.1.5 settings tab
  * and its two dispatched cards still exist on 0.1.5 hosts; this page only
  * mounts where the Plugins page declares its slot.)
+ *
+ * The composer quick-view switch sits above the cards: it governs the
+ * composer seat, which the user meets before either card's diagnostics, and
+ * the section renders nothing until a signed-in status document backs it.
  */
 export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): ReactNode {
   // Only `view: 'page'` is asked for on this slot today; the one-liner answer
@@ -46,6 +52,9 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
   if (view === 'summary') return t('intro')
   return (
     <ul style={pageStyle}>
+      <li>
+        <WorkBuddyQuickViewSection t={t} />
+      </li>
       {CARD_VARIANTS.map(variant => (
         <WorkBuddyPluginCard key={variant.id} t={t} variant={variant} />
       ))}

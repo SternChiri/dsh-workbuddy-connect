@@ -560,7 +560,22 @@ export class WorkBuddyCredentialStore {
       }
       return plaintext
     })
-    return parseWorkBuddyAuth(text)
+    const credential = parseWorkBuddyAuth(text)
+    if (credential !== undefined) {
+      // The desktop document's tokens are sealed at rest (WorkBuddy 5.6+), so
+      // plain readers — sibling plugins such as dsh-cost-meter, which only
+      // classify the file and never carry the Electron key helper — see an
+      // envelope where a token belongs. Having just decrypted the document,
+      // this process holds the plaintext, so the decrypted credential is
+      // persisted to the plugin-owned copy now rather than waiting for the
+      // first token refresh (which may be months away): the copy stays in
+      // `current()`'s freshness ranking, the desktop file stays the identity
+      // authority, and a refresh still overwrites the copy with newer tokens.
+      // Never refreshed, never rotated — this only mirrors what the desktop
+      // app already sealed.
+      await this.saveOwn(credential)
+    }
+    return credential
   }
 
   /**

@@ -12,7 +12,11 @@
  * to that variant's probe route, where the host forwards it to the config
  * editor. The document's `setBalanceQuickViewAvailable` field is the
  * capability signal (same convention as `useMaximumContextWindow`): a host
- * without a persistence channel omits it, and this section renders nothing.
+ * without a persistence channel omits it, and this section renders no switch.
+ *
+ * The section has two seats: the detail page's `plugins.detail.section` slot,
+ * and the top of the bundle's own configuration page, above the two variant
+ * cards. Both render the same component.
  *
  * After a successful save the host reconciles the plugin's config, which
  * reloads this plugin and this client contribution with it — the switch comes
@@ -32,9 +36,10 @@ import type { WorkBuddyWebStatus } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
 
-/** Props the plugin detail page delivers to this section. */
+/** Props this section accepts. The detail page passes the page's subject; the
+ * configuration page embeds the section directly and omits it. */
 export type WorkBuddyQuickViewSectionProps =
-  PropsRuntime<'plugins.detail.section'>
+  Partial<Pick<PropsRuntime<'plugins.detail.section'>, 'subject'>>
   & PropsLocale<'settings.workbuddy'>
 
 /** The bundle this section answers for; any other subject renders nothing. */
@@ -69,8 +74,14 @@ const copyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const hintStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
 const errorStyle: CSSProperties = { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' }
 
+/**
+ * Render the section for the plugin's own bundle. The detail page dispatches
+ * with a `subject`; the configuration page embeds this section above its cards
+ * with no subject, and both seats answer for the same bundle-level preference.
+ * A foreign subject (another bundle's detail page) renders nothing.
+ */
 export function WorkBuddyQuickViewSection({ subject, t }: WorkBuddyQuickViewSectionProps): ReactNode {
-  if (subject.kind !== 'bundle' || subject.pkg.name !== BUNDLE_NAME) return null
+  if (subject !== undefined && (subject.kind !== 'bundle' || subject.pkg.name !== BUNDLE_NAME)) return null
   return <QuickViewSectionInner t={t} />
 }
 
