@@ -131,6 +131,10 @@ export const en = {
   checkingForUpdates: 'Checking…',
   updateCheckUnavailable: 'Update information is unavailable right now. Check again later.',
   agentUpgradePrompt: 'Please open {repository}, check its latest version, and install or update the plugin "dsh-workbuddy-connect" in my current DSH profile following the project README (the install command differs by profile). After upgrading, fully quit and restart DSH.',
+  quickViewHeading: 'Balance quick view',
+  quickViewToggle: 'Show remaining credits beside the composer',
+  quickViewToggleHint: 'The credit badge and its refresh button next to the model selector. Saving reloads this plugin; the badge reappears within a moment.',
+  quickViewSaveFailed: 'Save failed: {message}',
 } as const
 
 export type WorkBuddySettingsKey = keyof typeof en
@@ -261,4 +265,8 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   checkingForUpdates: '检查中…',
   updateCheckUnavailable: '暂时无法获取更新信息，请稍后再试。',
   agentUpgradePrompt: '请打开 {repository}，查看最新版本，并按项目 README 把插件 dsh-workbuddy-connect 安装或更新到我当前使用的 DSH profile（不同 profile 的安装命令不同）。升级完成后请完全退出并重启 DSH。',
+  quickViewHeading: '余额速览',
+  quickViewToggle: '在输入框旁显示剩余积分',
+  quickViewToggleHint: '模型选择器旁的积分角标与刷新按钮。保存后本插件会重载，角标稍后即恢复。',
+  quickViewSaveFailed: '保存失败：{message}',
 }

@@ -31,6 +31,7 @@ import { WorkBuddyUpdateOverlay } from './WorkBuddyUpdateNotice.tsx'
 import { WorkBuddyUpdateStore } from './update-store.ts'
 import { WORKBUDDY_CONNECT_VERSION } from '../version.ts'
 import { WorkBuddyConfigPage } from './WorkBuddyConfigPage.tsx'
+import { WorkBuddyQuickViewSection } from './WorkBuddyQuickViewSection.tsx'
 import { CARD_VARIANTS, WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
 import type { WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
 import { en, zh } from './locales.ts'
@@ -235,6 +236,22 @@ export function apply(ctx: ClientContext): void {
         key: BUNDLE_NAME,
         locale: namespace,
       }, WorkBuddyConfigPage)) ?? NOOP_DISPOSER
+    ))
+  })
+  // SEAM THREE — the detail page's own content seat (DSH 0.2.x Plugins page
+  // bundle view). A list slot every bundle's detail page dispatches: this
+  // entry draws its own section chrome and answers null for any subject that
+  // is not this bundle, so it stays invisible everywhere else. The quick-view
+  // switch lives here rather than on the configuration page because the page
+  // is the two variants' status cards, and a composer preference deserves its
+  // own heading. Hosts without the seat never fire the inject.
+  guardClientContribution('plugins.detail.section quick view', () => {
+    ctx.slots.inject('plugins.detail.section', () => (
+      guardClientContribution('plugins.detail.section quick view', () => ctx.slots.register({
+        name: 'plugins.detail.section',
+        id: 'workbuddy-quick-view',
+        locale: namespace,
+      }, WorkBuddyQuickViewSection)) ?? NOOP_DISPOSER
     ))
   })
   // The reasoning-probe seat in the conversation composer. `modelDirectories`

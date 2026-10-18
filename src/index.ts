@@ -37,6 +37,7 @@ import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-pat
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { legacySettingsOf } from './legacy-settings.ts'
+import { configEditorOf } from './config-editor.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
@@ -679,6 +680,47 @@ export function apply(ctx: Context, config: Config): void {
   const probeKey = createProbeKey()
   let setMaximumContextWindow: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
+   * Persists the composer credit quick-view preference through the host's
+   * config editor (DSH 0.2.x channel for a plugin writing its own config).
+   * Declared mutable so the inject below can install it; stays `undefined`
+   * on a host without the service, and the undefined setter is what keeps
+   * the detail-page switch off that host (the status document carries no
+   * `setBalanceQuickViewAvailable` field, and the probe route answers 404).
+   */
+  let setBalanceQuickView: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
+  // DSH 0.2.x moved plugin configuration persistence to the host's config
+  // editor (it owns the profile patches and reconciles the reload), and that
+  // service is host-side: the browser cannot call it directly. The setter is
+  // therefore installed here — where the service lives — and exposed to the
+  // detail-page section through this plugin's own probe-control route, the
+  // same client→host bridge the maximum-context preference already uses.
+  // Optional inject: an older core without the service simply leaves the
+  // setter undefined, and the quick-view switch stays hidden (the status
+  // document carries no capability field, and the probe route answers 404).
+  ctx.inject(['configEditor'], editorCtx => {
+    // Structural narrowing keeps the build independent of the editor's
+    // package: see {@link configEditorOf} for why both members are required.
+    // The service is read off a record view rather than indexed on `Context`,
+    // where the member does not exist in this build's types.
+    const editor = configEditorOf((editorCtx as unknown as Record<string, unknown>)['configEditor'])
+    if (editor === undefined) return
+    setBalanceQuickView = async enabled => {
+      // The entry is this bundle's own loader entry; its `name` is the module
+      // specifier this package was loaded from, which embeds the package name
+      // regardless of how the specifier is spelled in the profile.
+      const entry = editor.entries().find(candidate =>
+        typeof candidate.options.name === 'string' && candidate.options.name.includes('dsh-workbuddy-connect'))
+      if (entry === undefined) {
+        return { state: 'failed', reason: 'configuration entry not found' }
+      }
+      await editor.edit(entry, currentConfig => ({
+        ...currentConfig,
+        showBalanceQuickView: enabled,
+      }))
+      return { state: 'updated' }
+    }
+  })
+  /**
    * Whether this host's settings service carries the 0.1.2-era section API.
    * Decided once, inside the `settings` inject: DSH 0.1.7 removed
    * `installSection` (and `update`) with no replacement this plugin can drive.
@@ -793,6 +835,10 @@ export function apply(ctx: Context, config: Config): void {
         // and the field's presence in the status document is the card's
         // default-on signal.
         showBalanceQuickView: () => current().showBalanceQuickView !== false,
+        // Capability signal for the detail-page switch: present only when the
+        // config-editor channel was installed, mirroring the
+        // `useMaximumContextWindow` presence convention below.
+        setBalanceQuickViewAvailable: () => setBalanceQuickView !== undefined,
         ...runtime.variant.id === CN_VARIANT.id ? {} : {
           // Presence of this field in the document is the card's capability
           // signal, so the getter answers `undefined` — not merely `false` —
@@ -848,6 +894,13 @@ export function apply(ctx: Context, config: Config): void {
             if (setMaximumContextWindow === undefined) return { state: 'failed', reason: 'settings are unavailable' }
             return setMaximumContextWindow(enabled)
           },
+        },
+        // Bundle-level preference: one switch for both variants, so every
+        // variant's route accepts the write and the detail-page section can
+        // post it to whichever document it rendered from.
+        setBalanceQuickView: async enabled => {
+          if (setBalanceQuickView === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          return setBalanceQuickView(enabled)
         },
         setModelVisibility: async (modelId, visible, expectedAccount) => {
           // Refused rather than bucketed: a signed-out variant, or a

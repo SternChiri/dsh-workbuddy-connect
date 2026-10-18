@@ -227,3 +227,29 @@ describe('balance quick-view preference', () => {
     expect(JSON.parse(response.body)).toHaveProperty('showBalanceQuickView', true)
   })
 })
+
+describe('balance quick-view persistence capability', () => {
+  /**
+   * The detail-page switch's capability signal follows the maximum-context
+   * convention: the field appears only when the host declared a persistence
+   * channel, and its presence — never a `false` value — is what the client
+   * reads. A host without the channel omits it, and the switch stays hidden.
+   */
+  it('writes the capability field when the getter answers true', async () => {
+    const port = await startStatusServer({ setBalanceQuickViewAvailable: () => true })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: '127.0.0.1' } })
+    expect(JSON.parse(response.body)).toHaveProperty('setBalanceQuickViewAvailable', true)
+  })
+
+  it('omits the capability field when the getter answers false', async () => {
+    const port = await startStatusServer({ setBalanceQuickViewAvailable: () => false })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: '127.0.0.1' } })
+    expect(JSON.parse(response.body)).not.toHaveProperty('setBalanceQuickViewAvailable')
+  })
+
+  it('omits the capability field when there is no getter at all (older host)', async () => {
+    const port = await startStatusServer()
+    const response = await requestOnce({ port, method: 'GET', headers: { host: '127.0.0.1' } })
+    expect(JSON.parse(response.body)).not.toHaveProperty('setBalanceQuickViewAvailable')
+  })
+})

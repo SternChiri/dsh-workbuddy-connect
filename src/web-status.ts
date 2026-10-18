@@ -55,6 +55,15 @@ export interface WorkBuddyStatusRouteOptions {
    */
   showBalanceQuickView?: () => boolean
   /**
+   * Whether this host can persist the quick-view preference (a `configEditor`
+   * channel exists to write the plugin's own config). Presence of the paired
+   * `setBalanceQuickViewAvailable` field in the document is the detail-page
+   * section's capability signal — the same convention the international card
+   * uses for `useMaximumContextWindow` — so a host without the channel omits
+   * the getter entirely and the switch stays hidden there.
+   */
+  setBalanceQuickViewAvailable?: () => boolean
+  /**
    * Per-account hidden-model state for the card's visibility controls.
    * Undefined when the caller offers none (tests, headless profiles); a
    * defined getter may still answer undefined — a signed-in account without a
@@ -197,9 +206,15 @@ export async function workBuddyWebStatus(
   const withQuickView: WorkBuddyWebStatus = deps.showBalanceQuickView?.() === false
     ? withVisibility
     : { ...withVisibility, showBalanceQuickView: true }
-  const statusWithModels: WorkBuddyWebStatus = modelsField.length > 0
-    ? { ...withQuickView, models: modelsField }
+  // Capability signal for the detail-page switch: written only when the host
+  // declared a persistence channel. Its presence — not its value — is what
+  // the section reads, so `false` never appears in a document.
+  const withQuickViewCapability: WorkBuddyWebStatus = deps.setBalanceQuickViewAvailable?.() === true
+    ? { ...withQuickView, setBalanceQuickViewAvailable: true }
     : withQuickView
+  const statusWithModels: WorkBuddyWebStatus = modelsField.length > 0
+    ? { ...withQuickViewCapability, models: modelsField }
+    : withQuickViewCapability
   // Probe state rides the signed-in document so the card can render the
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the
