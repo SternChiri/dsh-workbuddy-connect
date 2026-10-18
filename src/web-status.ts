@@ -199,13 +199,16 @@ export async function workBuddyWebStatus(
   // section's presence.
   const visibility = deps.visibility?.()
   const withVisibility: WorkBuddyWebStatus = visibility === undefined ? withCatalog : { ...withCatalog, visibility }
-  // The quick view is a preference, not a capability: only an explicit `false`
-  // removes the field. `undefined` (a caller without a getter) and `true` both
-  // write it, so a card whose document failed to load still shows the badge —
-  // the field's presence, not its value, is what the card reads.
-  const withQuickView: WorkBuddyWebStatus = deps.showBalanceQuickView?.() === false
-    ? withVisibility
-    : { ...withVisibility, showBalanceQuickView: true }
+  // The quick view is a preference, not a capability, so the getter answers a
+  // value and the document writes it verbatim — including an explicit `false`
+  // when the user switched the preference off. Omitting the field when off is
+  // not an option: the composer badge reads absence as "an older host, keep
+  // showing the badge", so an explicit `false` is the only signal that both
+  // hides the badge and still distinguishes a switched-off preference from a
+  // host that predates the field. Callers without a getter also write `true`,
+  // so a card whose document failed to load still shows the badge.
+  const quickViewOn = deps.showBalanceQuickView?.() !== false
+  const withQuickView: WorkBuddyWebStatus = { ...withVisibility, showBalanceQuickView: quickViewOn }
   // Capability signal for the detail-page switch: written only when the host
   // declared a persistence channel. Its presence — not its value — is what
   // the section reads, so `false` never appears in a document.

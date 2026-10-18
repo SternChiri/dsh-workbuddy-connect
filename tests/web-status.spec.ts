@@ -200,11 +200,11 @@ describe('maximum-context preference capability', () => {
 
 describe('balance quick-view preference', () => {
   /**
-   * Unlike the maximum-context field, the quick view is a preference rather
-   * than a capability: the document carries the field unless the preference is
-   * *explicitly* off, so a host that never answers (older plugin, headless
-   * caller) leaves the card's default-on rendering untouched. Presence, not
-   * value, is what the card reads.
+   * The quick view is a preference, and the document carries it verbatim:
+   * `true` when on, an explicit `false` when the user switched it off. The
+   * explicit `false` is load-bearing — the composer badge reads absence as
+   * "an older host, keep showing the badge", so omitting the field when off
+   * would make the switch unable to hide anything.
    */
   it('writes the field when the getter answers true', async () => {
     const port = await startStatusServer({ showBalanceQuickView: () => true })
@@ -212,12 +212,12 @@ describe('balance quick-view preference', () => {
     expect(JSON.parse(response.body)).toHaveProperty('showBalanceQuickView', true)
   })
 
-  it('omits the field when the getter answers false', async () => {
+  it('writes an explicit false when the getter answers false', async () => {
     const port = await startStatusServer({ showBalanceQuickView: () => false })
     const response = await requestOnce({ port, method: 'GET', headers: { host: '127.0.0.1' } })
     const document = JSON.parse(response.body) as Record<string, unknown>
-    expect(document).not.toHaveProperty('showBalanceQuickView')
-    // The rest of the document survives the omission: only the quick view goes.
+    expect(document).toHaveProperty('showBalanceQuickView', false)
+    // The rest of the document survives the off state: only the badge goes.
     expect(document).toHaveProperty('status')
   })
 

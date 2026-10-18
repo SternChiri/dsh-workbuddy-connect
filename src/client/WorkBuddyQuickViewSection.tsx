@@ -1,10 +1,9 @@
 /**
- * The plugin detail page's balance quick-view section.
+ * The bundle configuration page's balance quick-view section.
  *
- * The composer credit badge's on/off switch lives here rather than in the
- * bundle's configuration page because that page is the two variants' status
- * cards; a preference that governs the composer seat deserves its own section
- * on the detail page, where the host leaves the chrome to the plugin.
+ * The composer credit badge's on/off switch lives at the top of the bundle's
+ * configuration page, above the two variants' status cards: a preference that
+ * governs the composer seat sits before the diagnostic cards.
  *
  * The switch is bundle-level: one preference for both variants' composer
  * badges. It reads whichever variant's status document arrives first — the
@@ -13,10 +12,6 @@
  * editor. The document's `setBalanceQuickViewAvailable` field is the
  * capability signal (same convention as `useMaximumContextWindow`): a host
  * without a persistence channel omits it, and this section renders no switch.
- *
- * The section has two seats: the detail page's `plugins.detail.section` slot,
- * and the top of the bundle's own configuration page, above the two variant
- * cards. Both render the same component.
  *
  * After a successful save the host reconciles the plugin's config, which
  * reloads this plugin and this client contribution with it — the switch comes
@@ -36,8 +31,9 @@ import type { WorkBuddyWebStatus } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
 
-/** Props this section accepts. The detail page passes the page's subject; the
- * configuration page embeds the section directly and omits it. */
+/** Props this section accepts. The configuration page embeds the section
+ * directly; the subject prop is accepted for compatibility with callers that
+ * pass one, and a foreign bundle's subject renders nothing. */
 export type WorkBuddyQuickViewSectionProps =
   Partial<Pick<PropsRuntime<'plugins.detail.section'>, 'subject'>>
   & PropsLocale<'settings.workbuddy'>
@@ -75,10 +71,8 @@ const hintStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var
 const errorStyle: CSSProperties = { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' }
 
 /**
- * Render the section for the plugin's own bundle. The detail page dispatches
- * with a `subject`; the configuration page embeds this section above its cards
- * with no subject, and both seats answer for the same bundle-level preference.
- * A foreign subject (another bundle's detail page) renders nothing.
+ * Render the section. The configuration page embeds it above its cards; a
+ * foreign subject (another bundle's detail page) still renders nothing.
  */
 export function WorkBuddyQuickViewSection({ subject, t }: WorkBuddyQuickViewSectionProps): ReactNode {
   if (subject !== undefined && (subject.kind !== 'bundle' || subject.pkg.name !== BUNDLE_NAME)) return null

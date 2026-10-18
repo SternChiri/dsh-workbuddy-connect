@@ -304,11 +304,12 @@ export type WorkBuddyWebStatus =
     /** International-card preference selecting larger declared context windows. */
     useMaximumContextWindow?: boolean
     /**
-     * Whether the composer seat shows the remaining-credit quick view. The
-     * field's *absence* means off: presence semantics follow
-     * `useMaximumContextWindow`, so a document from an older host (or one
-     * that failed to load) simply keeps the card's built-in default — on —
-     * rather than hiding a feature the user never turned off.
+     * Whether the composer seat shows the remaining-credit quick view.
+     * Always written by this host, verbatim — `false` is a real user
+     * preference. The composer badge still reads absence as on so a
+     * document from an older host (or one that failed to load) keeps the
+     * card's built-in default rather than hiding a feature the user never
+     * turned off.
      */
     showBalanceQuickView?: boolean
     /**
