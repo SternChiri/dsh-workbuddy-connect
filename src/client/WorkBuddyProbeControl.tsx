@@ -22,7 +22,9 @@
  *   error, missing `credits`); zero is a real balance and is shown, `unlimited`
  *   renders as ∞ rather than as 0. The badge is why the control stays mounted
  *   for non-candidate models: the probe entry alone is what disappears for
- *   them.
+ *   them. The whole quick view (badge and its ↻) is switchable via the
+ *   plugin's `showBalanceQuickView` preference, carried by the same status
+ *   document; its absence — an older host — means on.
  * - a **↻ beside the badge** is the only re-read after the mount fetch: there
  *   is no interval and no focus polling, because every status GET also queries
  *   billing upstream and the balance should not refresh behind the user's
@@ -507,7 +509,19 @@ function ModelProbe({ model, card, label, t }: {
   // posing as fresh); the ↻ stays as the retry and is the seat's one re-read
   // affordance whatever the document says, which is also how the control
   // recovers from an unreadable first read.
-  const credit = creditFailed ? undefined : creditBadge(status, card, t)
+  //
+  // The quick view as a whole — badge and ↻ together — is switchable: the
+  // plugin's `showBalanceQuickView` rides the same document, and only an
+  // explicit `false` turns it off, so an older host (whose document simply
+  // lacks the field) keeps today's behaviour. When off, the refresh button
+  // goes with the badge: a balance the card does not show needs no re-read,
+  // and the seat keeps only the probe entry.
+  // Narrow to the signed-in variant first: `showBalanceQuickView` lives only
+  // on that branch of the document union, so reading it through the union is
+  // a type error rather than an `undefined`.
+  const signedIn = status?.status === 'signed-in' ? status : undefined
+  const quickView = signedIn?.showBalanceQuickView !== false
+  const credit = !quickView || creditFailed ? undefined : creditBadge(status, card, t)
 
   const text = tooltipText(t, model, { busy, result, failed })
   const disabled = busy || probe?.running === true || key === undefined
@@ -521,21 +535,23 @@ function ModelProbe({ model, card, label, t }: {
     <span
       style={wrapperStyle}
     >
-      <button
-        type="button"
-        style={{ ...refreshStyle, opacity: refreshing ? 0.6 : 1, cursor: refreshing ? 'default' : 'pointer' }}
-        title={t('composerCreditRefresh')}
-        aria-label={t('composerCreditRefresh')}
-        aria-busy={refreshing}
-        disabled={refreshing}
-        onClick={() => { void checkNow() }}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-          <path d="M20 12a8 8 0 1 1-2.34-5.66" />
-          <path d="M20 4v4h-4" />
-        </svg>
-      </button>
+      {quickView && (
+        <button
+          type="button"
+          style={{ ...refreshStyle, opacity: refreshing ? 0.6 : 1, cursor: refreshing ? 'default' : 'pointer' }}
+          title={t('composerCreditRefresh')}
+          aria-label={t('composerCreditRefresh')}
+          aria-busy={refreshing}
+          disabled={refreshing}
+          onClick={() => { void checkNow() }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+            <path d="M20 4v4h-4" />
+          </svg>
+        </button>
+      )}
 
       {credit === undefined ? null : <span style={creditStyle}>{credit}</span>}
 

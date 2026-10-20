@@ -46,6 +46,24 @@ export interface WorkBuddyStatusRouteOptions {
    */
   useMaximumContextWindow?: () => boolean | undefined
   /**
+   * Whether the card should render the remaining-credit quick view (the
+   * balance badge and its refresh button). Unlike `useMaximumContextWindow`,
+   * this is a preference rather than a capability a host might lack, so the
+   * getter is expected to answer a value: only `false` leaves the field out
+   * of the document, and an absent getter (tests, headless callers) keeps
+   * the card's default-on rendering untouched.
+   */
+  showBalanceQuickView?: () => boolean
+  /**
+   * Whether this host can persist the quick-view preference (a `configEditor`
+   * channel exists to write the plugin's own config). Presence of the paired
+   * `setBalanceQuickViewAvailable` field in the document is the detail-page
+   * section's capability signal — the same convention the international card
+   * uses for `useMaximumContextWindow` — so a host without the channel omits
+   * the getter entirely and the switch stays hidden there.
+   */
+  setBalanceQuickViewAvailable?: () => boolean
+  /**
    * Per-account hidden-model state for the card's visibility controls.
    * Undefined when the caller offers none (tests, headless profiles); a
    * defined getter may still answer undefined — a signed-in account without a
@@ -181,9 +199,25 @@ export async function workBuddyWebStatus(
   // section's presence.
   const visibility = deps.visibility?.()
   const withVisibility: WorkBuddyWebStatus = visibility === undefined ? withCatalog : { ...withCatalog, visibility }
+  // The quick view is a preference, not a capability, so the getter answers a
+  // value and the document writes it verbatim — including an explicit `false`
+  // when the user switched the preference off. Omitting the field when off is
+  // not an option: the composer badge reads absence as "an older host, keep
+  // showing the badge", so an explicit `false` is the only signal that both
+  // hides the badge and still distinguishes a switched-off preference from a
+  // host that predates the field. Callers without a getter also write `true`,
+  // so a card whose document failed to load still shows the badge.
+  const quickViewOn = deps.showBalanceQuickView?.() !== false
+  const withQuickView: WorkBuddyWebStatus = { ...withVisibility, showBalanceQuickView: quickViewOn }
+  // Capability signal for the detail-page switch: written only when the host
+  // declared a persistence channel. Its presence — not its value — is what
+  // the section reads, so `false` never appears in a document.
+  const withQuickViewCapability: WorkBuddyWebStatus = deps.setBalanceQuickViewAvailable?.() === true
+    ? { ...withQuickView, setBalanceQuickViewAvailable: true }
+    : withQuickView
   const statusWithModels: WorkBuddyWebStatus = modelsField.length > 0
-    ? { ...withVisibility, models: modelsField }
-    : withVisibility
+    ? { ...withQuickViewCapability, models: modelsField }
+    : withQuickViewCapability
   // Probe state rides the signed-in document so the card can render the
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the

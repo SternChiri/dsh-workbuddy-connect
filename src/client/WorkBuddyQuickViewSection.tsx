@@ -6,12 +6,15 @@
  * governs the composer seat sits before the diagnostic cards.
  *
  * The switch is bundle-level: one preference for both variants' composer
- * badges. It reads whichever variant's status document arrives first — the
- * current value and the probe key are the same on both — and posts its write
- * to that variant's probe route, where the host forwards it to the config
- * editor. The document's `setBalanceQuickViewAvailable` field is the
- * capability signal (same convention as `useMaximumContextWindow`): a host
- * without a persistence channel omits it, and this section renders no switch.
+ * badges. Both variants serve their own status document and probe route, and
+ * only the signed-in one answers — so this section asks the domestic route
+ * first and falls back to the international one, then keeps whichever
+ * document answered for the write. Hard-coding one region's paths would hide
+ * the switch on a host signed in to the other region.
+ *
+ * The document's `setBalanceQuickViewAvailable` field is the capability signal
+ * (same convention as `useMaximumContextWindow`): a host without a persistence
+ * channel omits it, and this section renders no switch.
  *
  * After a successful save the host reconciles the plugin's config, which
  * reloads this plugin and this client contribution with it — the switch comes
@@ -22,24 +25,25 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-// Type-only: the `plugins.detail.section` SlotMap entry, declared by the
-// Plugins page. A value import would fail the client bundle-purity gate.
-import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
-import { WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
+import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 import type { WorkBuddyWebStatus } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
 
-/** Props this section accepts. The configuration page embeds the section
- * directly; the subject prop is accepted for compatibility with callers that
- * pass one, and a foreign bundle's subject renders nothing. */
-export type WorkBuddyQuickViewSectionProps =
-  Partial<Pick<PropsRuntime<'plugins.detail.section'>, 'subject'>>
-  & PropsLocale<'settings.workbuddy'>
+/** Props this section accepts. The configuration page embeds the section directly. */
+export type WorkBuddyQuickViewSectionProps = PropsLocale<'settings.workbuddy'>
 
-/** The bundle this section answers for; any other subject renders nothing. */
-const BUNDLE_NAME = 'dsh-workbuddy-connect'
+/**
+ * The two variants' control channels, domestic first. A signed-in document
+ * names the region that is actually in use; a signed-out one answers from
+ * either route, so the pair is tried in order and the first signed-in answer
+ * wins.
+ */
+const CHANNELS: readonly { statusPath: string, probePath: string }[] = [
+  { statusPath: WORKBUDDY_STATUS_PATH, probePath: WORKBUDDY_PROBE_PATH },
+  { statusPath: WORKBUDDY_AI_STATUS_PATH, probePath: WORKBUDDY_AI_PROBE_PATH },
+]
 
 const sectionStyle: CSSProperties = {
   display: 'flex',
@@ -70,17 +74,39 @@ const copyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const hintStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
 const errorStyle: CSSProperties = { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' }
 
-/**
- * Render the section. The configuration page embeds it above its cards; a
- * foreign subject (another bundle's detail page) still renders nothing.
- */
-export function WorkBuddyQuickViewSection({ subject, t }: WorkBuddyQuickViewSectionProps): ReactNode {
-  if (subject !== undefined && (subject.kind !== 'bundle' || subject.pkg.name !== BUNDLE_NAME)) return null
+/** One channel's answering status document, or `undefined` when it did not answer. */
+async function readStatus(statusPath: string): Promise<WorkBuddyWebStatus | undefined> {
+  try {
+    const response = await fetch(statusPath, {
+      headers: { accept: 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+    if (!response.ok) return undefined
+    const value: unknown = await response.json()
+    return isWorkBuddyWebStatus(value) ? value : undefined
+  } catch {
+    // A read that failed is a channel that did not answer; the caller keeps
+    // looking, exactly like the card's refresh policy.
+    return undefined
+  }
+}
+
+/** Render the section; the configuration page embeds it above its cards. */
+export function WorkBuddyQuickViewSection({ t }: WorkBuddyQuickViewSectionProps): ReactNode {
   return <QuickViewSectionInner t={t} />
+}
+
+/** A signing-in document wins over a signed-out one, whichever route answered. */
+function preferred(current: WorkBuddyWebStatus | undefined, candidate: WorkBuddyWebStatus): WorkBuddyWebStatus {
+  if (current === undefined) return candidate
+  if (current.status !== 'signed-in' && candidate.status === 'signed-in') return candidate
+  return current
 }
 
 function QuickViewSectionInner({ t }: { t: (key: WorkBuddySettingsKey, params?: Record<string, unknown>) => string }): ReactNode {
   const [status, setStatus] = useState<WorkBuddyWebStatus | undefined>(undefined)
+  const [channel, setChannel] = useState<{ statusPath: string, probePath: string }>(CHANNELS[0]!)
   const [saving, setSaving] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
   const mounted = useRef(true)
@@ -90,23 +116,28 @@ function QuickViewSectionInner({ t }: { t: (key: WorkBuddySettingsKey, params?: 
   }, [])
 
   const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const response = await fetch(WORKBUDDY_STATUS_PATH, {
-        headers: { accept: 'application/json' },
-        credentials: 'same-origin',
-        cache: 'no-store',
-      })
-      const value: unknown = await response.json()
-      if (!isWorkBuddyWebStatus(value)) return
-      if (mounted.current) setStatus(value)
-    } catch {
-      // The document is a read; a failed one leaves the last known state in
-      // place, exactly like the card's refresh policy.
+    let answer: WorkBuddyWebStatus | undefined
+    let answered = CHANNELS[0]!
+    for (const candidate of CHANNELS) {
+      const document = await readStatus(candidate.statusPath)
+      if (document === undefined) continue
+      if (answer === undefined) answered = candidate
+      const next = preferred(answer, document)
+      // Remember which route produced the winning document: that route's probe
+      // endpoint is the only one that accepts the write for that variant.
+      if (next !== answer) answered = candidate
+      answer = next
+      if (answer?.status === 'signed-in') break
     }
+    if (!mounted.current || answer === undefined) return
+    setStatus(answer)
+    setChannel(answered)
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
 
+  // Absence of the field means "on": a host that predates it keeps showing the
+  // badge. Only an explicit `false` turns the quick view off.
   const enabled = status?.status === 'signed-in' && status.showBalanceQuickView !== false
   const canPersist = status?.status === 'signed-in' && status.setBalanceQuickViewAvailable === true
   const probeKey = status?.status === 'signed-in' ? status.probeKey : undefined
@@ -116,7 +147,7 @@ function QuickViewSectionInner({ t }: { t: (key: WorkBuddySettingsKey, params?: 
     setSaving(true)
     setFailure(undefined)
     try {
-      const response = await fetch(WORKBUDDY_PROBE_PATH, {
+      const response = await fetch(channel.probePath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Workbuddy-Probe-Key': probeKey },
         credentials: 'same-origin',
@@ -146,7 +177,7 @@ function QuickViewSectionInner({ t }: { t: (key: WorkBuddySettingsKey, params?: 
     } finally {
       if (mounted.current) setSaving(false)
     }
-  }, [probeKey, refresh, saving, t])
+  }, [channel, probeKey, refresh, saving, t])
 
   // Signed-out or unreadable document: nothing to switch yet. The section
   // stays out of the way rather than showing a checkbox that cannot reflect

@@ -37,6 +37,7 @@ import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-pat
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { legacySettingsOf, modernSettingsOf, resolveModernSettingsEntryId } from './legacy-settings.ts'
+import { configEditorOf, ownLoaderEntryId, resolveConfigEditorEntry, WORKBUDDY_ENTRY_SPECIFIER } from './config-editor.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
@@ -237,6 +238,12 @@ export interface Config {
   probeConsent?: boolean
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean
+  /**
+   * Whether the composer seat shows the remaining-credit quick view (balance
+   * badge and its refresh button). Off is a real user preference, not an
+   * error state, so it defaults on and only an explicit `false` hides it.
+   */
+  showBalanceQuickView?: boolean
 }
 
 /** Explicit CN desktop auth-file path (shared by the plugin schema and its section). */
@@ -254,6 +261,9 @@ const PROBE_CONSENT_FIELD = z.boolean().default(false)
 // {@link plainConfigBoolean} below.
 const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true).volatile()
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
+/** Balance quick-view preference (shared by the plugin schema and its section). */
+const SHOW_BALANCE_QUICK_VIEW_FIELD = z.boolean().default(true)
+  .description('Show the remaining-credit quick view beside the composer model selector (on by default)')
 
 // Same `.volatile()` typing artifact as {@link AI_SECTION}: the static
 // default type of the marked field is `Volatile<boolean>`, while consumers
@@ -264,14 +274,14 @@ export const Config = z.object({
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+  showBalanceQuickView: SHOW_BALANCE_QUICK_VIEW_FIELD,
 }) as unknown as z<Config>
 
 /**
- * Read the context-window preference off a resolved Config. Fields marked
- * `.volatile()` materialize as cosmokit volatile containers (`{ get() }`) so
- * the host can live-update them without remounting the plugin; plain hosts
- * and values set through this plugin are plain booleans. Both spellings
- * answer here.
+ * Read a boolean off a resolved Config. Fields marked `.volatile()`
+ * materialize as cosmokit volatile containers (`{ get() }`) so the host can
+ * live-update them without remounting the plugin; plain hosts and values set
+ * through this plugin are plain booleans. Both spellings answer here.
  */
 function plainConfigBoolean(value: unknown): boolean | undefined {
   if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
@@ -697,6 +707,49 @@ export function apply(ctx: Context, config: Config): void {
   const probeKey = createProbeKey()
   let setMaximumContextWindow: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
+   * Persists the composer credit quick-view preference through the host's
+   * config editor (DSH 0.2.x channel for a plugin writing its own config).
+   * Declared mutable so the inject below can install it; stays `undefined`
+   * on a host without the service, and the undefined setter is what keeps
+   * the detail-page switch off that host (the status document carries no
+   * `setBalanceQuickViewAvailable` field, and the probe route answers 404).
+   */
+  let setBalanceQuickView: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
+  // DSH 0.2.x moved plugin configuration persistence to the host's config
+  // editor (it owns the profile patches and reconciles the reload), and that
+  // service is host-side: the browser cannot call it directly. The setter is
+  // therefore installed here — where the service lives — and exposed to the
+  // detail-page section through this plugin's own probe-control route, the
+  // same client→host bridge the maximum-context preference already uses.
+  // Optional inject: an older core without the service simply leaves the
+  // setter undefined, and the quick-view switch stays hidden (the status
+  // document carries no capability field, and the probe route answers 404).
+  ctx.inject(['configEditor'], editorCtx => {
+    // Structural narrowing keeps the build independent of the editor's
+    // package: see {@link configEditorOf} for why both members are required.
+    // The service is read off a record view rather than indexed on `Context`,
+    // where the member does not exist in this build's types.
+    const editor = configEditorOf((editorCtx as unknown as Record<string, unknown>)['configEditor'])
+    if (editor === undefined) return
+    // Identity comes from the loader, not from the specifier: the profile may
+    // load this package several times (two instances, a nested group, a
+    // renamed entry), and a name match would then write the preference into
+    // whichever instance came first. `ctx.fiber.entry.options.id` is the id
+    // this very instance runs under, and it is unique per composition.
+    const ownEntryId = ownLoaderEntryId(ctx)
+    setBalanceQuickView = async enabled => {
+      const entry = resolveConfigEditorEntry(editor.entries(), ownEntryId, WORKBUDDY_ENTRY_SPECIFIER)
+      if (entry === undefined) {
+        return { state: 'failed', reason: 'configuration entry not found' }
+      }
+      await editor.edit(entry, currentConfig => ({
+        ...currentConfig,
+        showBalanceQuickView: enabled,
+      }))
+      return { state: 'updated' }
+    }
+  })
+  /**
    * Whether this host's settings service carries the 0.1.2-era section API.
    * Decided once, inside the `settings` inject: DSH 0.1.7 removed
    * `installSection` (and `update`) with no replacement this plugin can drive.
@@ -808,6 +861,15 @@ export function apply(ctx: Context, config: Config): void {
             ? undefined
             : { account, disabled: runtime.visibilityStore.disabled(account) }
         },
+        // Only an explicit `false` hides the quick view: `undefined` (a host
+        // that could not load the document yet) and `true` both keep it on,
+        // and the field's presence in the status document is the card's
+        // default-on signal.
+        showBalanceQuickView: () => current().showBalanceQuickView !== false,
+        // Capability signal for the detail-page switch: present only when the
+        // config-editor channel was installed, mirroring the
+        // `useMaximumContextWindow` presence convention below.
+        setBalanceQuickViewAvailable: () => setBalanceQuickView !== undefined,
         ...runtime.variant.id === CN_VARIANT.id ? {} : {
           // Presence of this field in the document is the card's capability
           // signal, so the getter answers `undefined` — not merely `false` —
@@ -863,6 +925,13 @@ export function apply(ctx: Context, config: Config): void {
             if (setMaximumContextWindow === undefined) return { state: 'failed', reason: 'settings are unavailable' }
             return setMaximumContextWindow(enabled)
           },
+        },
+        // Bundle-level preference: one switch for both variants, so every
+        // variant's route accepts the write and the detail-page section can
+        // post it to whichever document it rendered from.
+        setBalanceQuickView: async enabled => {
+          if (setBalanceQuickView === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          return setBalanceQuickView(enabled)
         },
         setModelVisibility: async (modelId, visible, expectedAccount) => {
           // Refused rather than bucketed: a signed-out variant, or a
@@ -1072,6 +1141,32 @@ export function apply(ctx: Context, config: Config): void {
         liveConfig = { ...liveConfig, useMaximumContextWindow: enabled }
         current = () => liveConfig
         applyModernConfig()
+        return { state: 'updated' }
+      }
+
+      /**
+       * Bundle-level preference, not a section field: showBalanceQuickView
+       * lives in the top-level config every variant's runtime reads, so it is
+       * written through the same entry without touching the maximum-window
+       * value (a patch carries only the keys it names).
+       */
+      setBalanceQuickView = async enabled => {
+        const ns = settingsEntryId()
+        if (ns === undefined) return { state: 'failed', reason: 'no configurable settings entry for this plugin' }
+        try {
+          await modern.update(ns, { showBalanceQuickView: enabled })
+          // Trust the write only once the document agrees, exactly as the
+          // context-window setter above does.
+          const after = modern.describe().find(entry => entry.ns === ns)
+          const stored = (after?.value as { showBalanceQuickView?: unknown } | undefined)?.showBalanceQuickView
+          if (stored !== enabled) {
+            return { state: 'failed', reason: 'the settings document did not accept the quick-view preference' }
+          }
+        } catch (error: unknown) {
+          return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+        }
+        liveConfig = { ...liveConfig, showBalanceQuickView: enabled }
+        current = () => liveConfig
         return { state: 'updated' }
       }
 

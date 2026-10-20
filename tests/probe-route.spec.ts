@@ -177,6 +177,34 @@ describe('probe control route', () => {
     expect(enabled).toBe(true)
   })
 
+  it('accepts the balance quick-view preference only when the host supports it', async () => {
+    let enabled: boolean | undefined
+    const { origin, key } = await mount({
+      setBalanceQuickView: async value => {
+        enabled = value
+        return { state: 'updated' }
+      },
+    })
+    const result = await post(origin, { action: 'set-balance-quick-view', enabled: false }, { 'X-WorkBuddy-Probe-Key': key })
+    expect(result).toMatchObject({ status: 200, body: { state: 'updated' } })
+    expect(enabled).toBe(false)
+  })
+
+  it('answers 404 for the balance quick-view when no persistence channel exists', async () => {
+    const { origin, key, calls } = await mount()
+    const result = await post(origin, { action: 'set-balance-quick-view', enabled: true }, { 'X-WorkBuddy-Probe-Key': key })
+    expect(result.status).toBe(404)
+    expect(result.body['error']).toBe('balance-quick-view-setting-not-supported')
+    expect(calls).toEqual([])
+  })
+
+  it('rejects a balance quick-view write without a boolean enabled', async () => {
+    const { origin, key, calls } = await mount()
+    const result = await post(origin, { action: 'set-balance-quick-view' }, { 'X-WorkBuddy-Probe-Key': key })
+    expect(result.status).toBe(400)
+    expect(calls).toEqual([])
+  })
+
   it('mints a distinct key per call', () => {
     expect(createProbeKey()).not.toBe(createProbeKey())
   })

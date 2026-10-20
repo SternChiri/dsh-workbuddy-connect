@@ -543,6 +543,74 @@ describe('Composer model probe', () => {
       expect(focusHandlers).toHaveLength(0)
     })
 
+    describe('quick-view switch (showBalanceQuickView)', () => {
+      /**
+       * The document's presence semantics are deliberate: presence means on,
+       * absence means off — the host writes the field unless the preference is
+       * explicitly false, so a document that simply lacks it (older host) must
+       * render exactly as before. The card reads presence, not a default.
+       */
+      it('keeps badge and refresh by default and on explicit true', async () => {
+        withCredits(3401)
+        await mount()
+        // Default document (no field) is the on case: older hosts render it.
+        expect(spanTexts()).toContain(`WB.${number(3401)} credits`)
+        expect(refreshButton()).toBeDefined()
+        statusBody['showBalanceQuickView'] = true
+        await act(async () => { refreshButton().props.onClick() })
+        expect(spanTexts()).toContain(`WB.${number(3401)} credits`)
+        expect(refreshButton()).toBeDefined()
+      })
+
+      it('hides badge and refresh together on an explicit false', async () => {
+        withCredits(3401)
+        statusBody['showBalanceQuickView'] = false
+        await mount()
+        // Off is a preference, not an error: the badge and the ↻ go together —
+        // a balance the card does not show needs no re-read — but the probe
+        // entry sharing the seat is untouched.
+        expect(spanTexts().join(' ')).not.toContain('credits')
+        expect(button().some(node => node.props['aria-label'] === en.composerCreditRefresh)).toBe(false)
+        expect(spanTexts()).toContain(en.probeLabel)
+      })
+
+      it('hides the quick view without breaking the probe flow', async () => {
+        withCredits(3401)
+        statusBody['showBalanceQuickView'] = false
+        await mount()
+        await act(async () => { probeButton()!.props.onClick() })
+        // A seat without a balance still probes: the switch turns off one
+        // feature, not the control.
+        expect(spanTexts()).toContain(en.probeBubbleBody)
+      })
+
+      it('keeps the badge when the field is missing entirely (older host)', async () => {
+        withCredits(3401)
+        delete statusBody['showBalanceQuickView']
+        await mount()
+        // Absence of the field is the on signal, so a document from a host
+        // predating the switch renders exactly as before.
+        expect(spanTexts()).toContain(`WB.${number(3401)} credits`)
+        expect(refreshButton()).toBeDefined()
+      })
+
+      it('turns the quick view back on when the preference follows the user', async () => {
+        // Off, then a re-read answers with the field present again (the user
+        // flipped the preference): the document, not local state, is
+        // authoritative — so the badge returns without a remount.
+        withCredits(3401)
+        statusBody['showBalanceQuickView'] = false
+        await mount()
+        expect(spanTexts().join(' ')).not.toContain('credits')
+        statusBody['showBalanceQuickView'] = true
+        await act(async () => { probeButton()!.props.onClick() })
+        await act(async () => {
+          button().find(node => node.children.join('') === en.probeConfirmAction)!.props.onClick()
+        })
+        expect(spanTexts()).toContain(`WB.${number(3401)} credits`)
+      })
+    })
+
     it('refreshes on demand through the same status route', async () => {
       withCredits(3401)
       await mount()
