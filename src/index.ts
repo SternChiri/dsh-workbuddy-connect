@@ -36,8 +36,7 @@ import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
-import { legacySettingsOf } from './legacy-settings.ts'
-import { configEditorOf } from './config-editor.ts'
+import { legacySettingsOf, modernSettingsOf, resolveModernSettingsEntryId } from './legacy-settings.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
@@ -238,12 +237,6 @@ export interface Config {
   probeConsent?: boolean
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean
-  /**
-   * Whether the composer seat shows the remaining-credit quick view (balance
-   * badge and its refresh button). Off is a real user preference, not an
-   * error state, so it defaults on and only an explicit `false` hides it.
-   */
-  showBalanceQuickView?: boolean
 }
 
 /** Explicit CN desktop auth-file path (shared by the plugin schema and its section). */
@@ -253,19 +246,39 @@ const AUTH_FILE_AI_FIELD = z.string().description('WorkBuddy AI desktop auth fil
 /** Probe authorization (shared by the plugin schema and the CN section). */
 const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
-const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
+// `.volatile()` is what makes this field live-editable through the DSH 0.2.x
+// SettingsForms facade: `describe()` only serves entries with at least one
+// volatile field, and `update()` rejects writes to anything else. The cost is
+// that a resolved Config hands the field back wrapped in a cosmokit volatile
+// container (`{ get() }`), so every read goes through
+// {@link plainConfigBoolean} below.
+const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true).volatile()
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
-/** Balance quick-view preference (shared by the plugin schema and its section). */
-const SHOW_BALANCE_QUICK_VIEW_FIELD = z.boolean().default(true)
-  .description('Show the remaining-credit quick view beside the composer model selector (on by default)')
 
-export const Config: z<Config> = z.object({
+// Same `.volatile()` typing artifact as {@link AI_SECTION}: the static
+// default type of the marked field is `Volatile<boolean>`, while consumers
+// see plain booleans — this plugin unwraps every resolved value through
+// {@link plainConfigBoolean}.
+export const Config = z.object({
   authFile: AUTH_FILE_FIELD,
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
-  showBalanceQuickView: SHOW_BALANCE_QUICK_VIEW_FIELD,
-})
+}) as unknown as z<Config>
+
+/**
+ * Read the context-window preference off a resolved Config. Fields marked
+ * `.volatile()` materialize as cosmokit volatile containers (`{ get() }`) so
+ * the host can live-update them without remounting the plugin; plain hosts
+ * and values set through this plugin are plain booleans. Both spellings
+ * answer here.
+ */
+function plainConfigBoolean(value: unknown): boolean | undefined {
+  if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
+    return plainConfigBoolean((value as { get(): unknown }).get())
+  }
+  return value === undefined ? undefined : value === true
+}
 
 /**
  * The CN side's settings section: only the fields that side edits.
@@ -282,10 +295,14 @@ const CN_SECTION: z<Config> = z.object({
 })
 
 /** The international card's settings section and its context-window preference. */
-const AI_SECTION: z<Config> = z.object({
+// The `.volatile()` marking makes the field's static default type
+// `Volatile<boolean>`, which no longer matches `z<Config>` — an artifact of
+// schemastery's typing only: at runtime the section carries plain booleans
+// (this plugin unwraps resolved values through `plainConfigBoolean`).
+const AI_SECTION = z.object({
   authFileAI: AUTH_FILE_AI_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
-})
+}) as unknown as z<Config>
 
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
 interface VariantRuntime {
@@ -413,7 +430,7 @@ function createVariantRuntime(
   })
   const fallback = fallbackFor(variant)
   const catalog = new WorkBuddyCatalog(fallback)
-  if (variant.id !== CN_VARIANT.id) catalog.setUseMaximumContextWindow(config.useMaximumContextWindow === true)
+  if (variant.id !== CN_VARIANT.id) catalog.setUseMaximumContextWindow(plainConfigBoolean(config.useMaximumContextWindow) === true)
   // Start hidden: a variant must serve no models until an account has actually
   // been adopted, so a signed-out variant is empty rather than showing a roster
   // whose models could only fail. `adoptIdentity` is what reveals it, and it
@@ -680,47 +697,6 @@ export function apply(ctx: Context, config: Config): void {
   const probeKey = createProbeKey()
   let setMaximumContextWindow: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
-   * Persists the composer credit quick-view preference through the host's
-   * config editor (DSH 0.2.x channel for a plugin writing its own config).
-   * Declared mutable so the inject below can install it; stays `undefined`
-   * on a host without the service, and the undefined setter is what keeps
-   * the detail-page switch off that host (the status document carries no
-   * `setBalanceQuickViewAvailable` field, and the probe route answers 404).
-   */
-  let setBalanceQuickView: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
-  // DSH 0.2.x moved plugin configuration persistence to the host's config
-  // editor (it owns the profile patches and reconciles the reload), and that
-  // service is host-side: the browser cannot call it directly. The setter is
-  // therefore installed here — where the service lives — and exposed to the
-  // detail-page section through this plugin's own probe-control route, the
-  // same client→host bridge the maximum-context preference already uses.
-  // Optional inject: an older core without the service simply leaves the
-  // setter undefined, and the quick-view switch stays hidden (the status
-  // document carries no capability field, and the probe route answers 404).
-  ctx.inject(['configEditor'], editorCtx => {
-    // Structural narrowing keeps the build independent of the editor's
-    // package: see {@link configEditorOf} for why both members are required.
-    // The service is read off a record view rather than indexed on `Context`,
-    // where the member does not exist in this build's types.
-    const editor = configEditorOf((editorCtx as unknown as Record<string, unknown>)['configEditor'])
-    if (editor === undefined) return
-    setBalanceQuickView = async enabled => {
-      // The entry is this bundle's own loader entry; its `name` is the module
-      // specifier this package was loaded from, which embeds the package name
-      // regardless of how the specifier is spelled in the profile.
-      const entry = editor.entries().find(candidate =>
-        typeof candidate.options.name === 'string' && candidate.options.name.includes('dsh-workbuddy-connect'))
-      if (entry === undefined) {
-        return { state: 'failed', reason: 'configuration entry not found' }
-      }
-      await editor.edit(entry, currentConfig => ({
-        ...currentConfig,
-        showBalanceQuickView: enabled,
-      }))
-      return { state: 'updated' }
-    }
-  })
-  /**
    * Whether this host's settings service carries the 0.1.2-era section API.
    * Decided once, inside the `settings` inject: DSH 0.1.7 removed
    * `installSection` (and `update`) with no replacement this plugin can drive.
@@ -729,6 +705,8 @@ export function apply(ctx: Context, config: Config): void {
    * checkbox that could not be saved.
    */
   let legacySettingsAvailable = false
+  /** Whether modern DSH 0.2.x SettingsForms service is available to persist settings. */
+  let settingsAvailable = false
   /**
    * Point a variant at an account identity, invalidating whatever the previous
    * one left behind.
@@ -830,22 +808,13 @@ export function apply(ctx: Context, config: Config): void {
             ? undefined
             : { account, disabled: runtime.visibilityStore.disabled(account) }
         },
-        // Only an explicit `false` hides the quick view: `undefined` (a host
-        // that could not load the document yet) and `true` both keep it on,
-        // and the field's presence in the status document is the card's
-        // default-on signal.
-        showBalanceQuickView: () => current().showBalanceQuickView !== false,
-        // Capability signal for the detail-page switch: present only when the
-        // config-editor channel was installed, mirroring the
-        // `useMaximumContextWindow` presence convention below.
-        setBalanceQuickViewAvailable: () => setBalanceQuickView !== undefined,
         ...runtime.variant.id === CN_VARIANT.id ? {} : {
           // Presence of this field in the document is the card's capability
           // signal, so the getter answers `undefined` — not merely `false` —
           // on a host that cannot persist the preference. See
           // {@link legacySettingsAvailable}.
-          useMaximumContextWindow: () => legacySettingsAvailable
-            ? current().useMaximumContextWindow === true
+          useMaximumContextWindow: () => (legacySettingsAvailable || settingsAvailable)
+            ? plainConfigBoolean(current().useMaximumContextWindow) === true
             : undefined,
         },
       })
@@ -894,13 +863,6 @@ export function apply(ctx: Context, config: Config): void {
             if (setMaximumContextWindow === undefined) return { state: 'failed', reason: 'settings are unavailable' }
             return setMaximumContextWindow(enabled)
           },
-        },
-        // Bundle-level preference: one switch for both variants, so every
-        // variant's route accepts the write and the detail-page section can
-        // post it to whichever document it rendered from.
-        setBalanceQuickView: async enabled => {
-          if (setBalanceQuickView === undefined) return { state: 'failed', reason: 'settings are unavailable' }
-          return setBalanceQuickView(enabled)
         },
         setModelVisibility: async (modelId, visible, expectedAccount) => {
           // Refused rather than bucketed: a signed-out variant, or a
@@ -971,51 +933,198 @@ export function apply(ctx: Context, config: Config): void {
      * detection exists to survive.
      */
     const legacy = legacySettingsOf(settingsCtx.settings)
-    if (legacy === undefined) {
-      ctx.logger.warn('dsh-workbuddy-connect: host settings service has no installSection API; per-variant settings and the maximum-context preference are unavailable')
+    if (legacy !== undefined) {
+      legacySettingsAvailable = true
+      /** Section sources; each falls back to its own slice when its side unloads. */
+      const sources: { cn: () => Config, ai: () => Config } = {
+        cn: () => config,
+        ai: () => config,
+      }
+      /** Merge both sections into the whole config the rest of the plugin reads. */
+      const merged = (): Config => {
+        // The AI preference may arrive as a volatile container (see
+        // {@link plainConfigBoolean}); the merged config always carries a
+        // plain boolean so downstream comparisons keep working.
+        const aiMaximum = plainConfigBoolean(sources.ai().useMaximumContextWindow)
+        return {
+          ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
+          ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
+          ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
+          ...aiMaximum === undefined ? {} : { useMaximumContextWindow: aiMaximum },
+        }
+      }
+      const applyMaximumContextWindow = (next: Config): void => {
+        const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
+        if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
+      }
+      const repointStores = (): void => {
+        const next = merged()
+        applyMaximumContextWindow(next)
+        for (const runtime of runtimes) {
+          runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
+        }
+      }
+      legacy.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
+        setSource(source: () => Config) { sources.cn = source; current = merged },
+        onChange: repointStores,
+      })
+      legacy.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
+        setSource(source: () => Config) { sources.ai = source; current = merged },
+        onChange: repointStores,
+      })
+      // No install-time apply here: the real 0.1.5/0.1.6 `installSection` fires
+      // `onChange()` once synchronously at install (dsh-settings 0.1.6 calls it
+      // unconditionally right after `setSource`), so a restored preference
+      // already reaches `repointStores` through that first notification.
+      // Calling it again would only repeat the work.
+      setMaximumContextWindow = async enabled => {
+        await legacy.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
+        return { state: 'updated' }
+      }
       return
     }
-    legacySettingsAvailable = true
-    /** Section sources; each falls back to its own slice when its side unloads. */
-    const sources: { cn: () => Config, ai: () => Config } = {
-      cn: () => config,
-      ai: () => config,
-    }
-    /** Merge both sections into the whole config the rest of the plugin reads. */
-    const merged = (): Config => ({
-      ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
-      ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
-      ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
-      ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
-    })
-    const applyMaximumContextWindow = (next: Config): void => {
-      const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
-      if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
-    }
-    const repointStores = (): void => {
-      const next = merged()
-      applyMaximumContextWindow(next)
-      for (const runtime of runtimes) {
-        runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
+
+    const modern = modernSettingsOf(settingsCtx.settings)
+    if (modern !== undefined) {
+      /**
+       * The live preference as the host's own Config reports it.
+       *
+       * The forms layer is the single source of truth on a 0.2.x host: a write
+       * lands in the profile document and comes back through `describe()`, so
+       * nothing has to be mirrored in memory here (and a mirror is exactly how
+       * runtime and saved state drift apart). The persisted default already
+       * applies — the preference field defaults to `true` and the composition
+       * handed this plugin its resolved `config`.
+       */
+      let liveConfig: Config = { ...config, useMaximumContextWindow: plainConfigBoolean(config.useMaximumContextWindow) ?? true }
+      /** Whether {@link liveConfig} came from a settings descriptor (see below). */
+      let liveConfigBound = false
+      /**
+       * Read this plugin's own entry out of the host's forms.
+       *
+       * The namespace on a 0.2.x host is the *profile entry id* — not the
+       * `SettingsNamespace` the 0.1.x sections were installed under — so it is
+       * whatever the user named this plugin in the profile composition.
+       *
+       * Identity cannot come from the descriptors themselves: `describe()`
+       * hands out *serialized* forms (`volatileForm(schema).toJSON()`), never
+       * the live Config object, and its rows carry no fiber — so
+       * `desc.schema === Config` and fiber comparisons are always false
+       * against the real service. The loader instead keys entries by id and
+       * attaches them to the fibers it runs (`ctx.fiber.entry.options.id`, unlike the tree-qualified `entry.id`), which is
+       * what {@link resolveModernSettingsEntryId} reads; the package-name
+       * literal stays as the only fallback (entry ids are unique per
+       * composition, so it can only name this plugin). Anything unmatched
+       * answers `undefined` — a wrong guess would silently write another
+       * plugin's configuration.
+       */
+      const settingsEntryId = (): string | undefined => {
+        try {
+          const entry = (ctx.fiber as unknown as { entry?: { id?: string; options?: { id?: string } } } | undefined)?.entry
+          return resolveModernSettingsEntryId(modern.describe(), entry?.options?.id ?? entry?.id)
+        } catch (error: unknown) {
+          ctx.logger.warn('dsh-workbuddy-connect: reading this plugin\'s settings entry failed: %s', error)
+          return undefined
+        }
       }
+
+      /**
+       * Apply whatever the settings document now says.
+       *
+       * The value read is the descriptor's `value` — the projection of the live
+       * fiber config, i.e. what the loader actually resolved — rather than
+       * `user`, which names only the profile's own section and would miss an
+       * inherited or default value that is nonetheless in effect.
+       */
+      const applyModernConfig = (): void => {
+        if (!liveConfigBound) return
+        const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
+        // `plainConfigBoolean` guards against a wrapper sneaking into
+        // liveConfig from a future code path — a raw `=== true` on a volatile
+        // container reads false and would silently shrink the window.
+        if (runtime?.catalog.setUseMaximumContextWindow(plainConfigBoolean(liveConfig.useMaximumContextWindow) === true)) runtime.invalidate()
+      }
+
+      setMaximumContextWindow = async enabled => {
+        const ns = settingsEntryId()
+        // No guessing: a host that does not serve this plugin's entry cannot
+        // store the preference, and reporting success would be a lie.
+        if (ns === undefined) return { state: 'failed', reason: 'no configurable settings entry for this plugin' }
+        // Persist first, then apply — the order `setModelVisibility` below
+        // already uses. Applying the catalog before the write would advertise
+        // a window the profile does not carry after a restart if the write
+        // failed.
+        try {
+          await modern.update(ns, { useMaximumContextWindow: enabled })
+          // Trust the write only once the document agrees. A write that
+          // resolves but leaves the value untouched (a no-op host adapter)
+          // must not be reported as saved.
+          const after = modern.describe().find(entry => entry.ns === ns)
+          const stored = (after?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
+          if (stored !== enabled) {
+            return { state: 'failed', reason: 'the settings document did not accept the context-window preference' }
+          }
+        } catch (error: unknown) {
+          // A toggle that did not persist must not be reported as saved, and
+          // the runtime keeps the value it actually has.
+          return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+        }
+        liveConfig = { ...liveConfig, useMaximumContextWindow: enabled }
+        current = () => liveConfig
+        applyModernConfig()
+        return { state: 'updated' }
+      }
+
+      // SettingsForms may publish the entry several seconds after injection.
+      // Read only, with a finite budget (15.75s); events can recover later.
+      let retry: ReturnType<typeof setTimeout> | undefined
+      let retryIndex = 0
+      let bindingStopped = false
+      const retryDelays = [250, 500, 1000, 2000, 4000, 8000]
+      const clearRetry = (): void => {
+        clearTimeout(retry)
+        retry = undefined
+      }
+      const bindModernConfig = (): void => {
+        if (bindingStopped) return
+        try {
+          const ns = settingsEntryId()
+          const entry = ns === undefined ? undefined : modern.describe().find(desc => desc.ns === ns)
+          const schema = entry?.schema === undefined ? undefined : new z(entry.schema as never)
+          settingsAvailable = schema?.dict?.useMaximumContextWindow?.type === 'boolean'
+          if (settingsAvailable) {
+            const stored = (entry?.value as { useMaximumContextWindow?: unknown } | undefined)?.useMaximumContextWindow
+            liveConfig = { ...liveConfig, useMaximumContextWindow: plainConfigBoolean(stored) ?? plainConfigBoolean(liveConfig.useMaximumContextWindow) ?? true }
+            liveConfigBound = true
+            current = () => liveConfig
+            applyModernConfig()
+            clearRetry()
+            return
+          }
+        } catch (error: unknown) {
+          settingsAvailable = false
+          ctx.logger.warn('dsh-workbuddy-connect: reading the stored context-window preference failed: %s', error)
+        }
+        if (retry === undefined && retryIndex < retryDelays.length) {
+          retry = setTimeout(() => {
+            retry = undefined
+            bindModernConfig()
+          }, retryDelays[retryIndex++])
+        }
+      }
+      settingsCtx.effect(() => () => {
+        bindingStopped = true
+        clearRetry()
+        settingsAvailable = false
+      })
+      settingsCtx.effect(() => ctx.on('settings/document-updated', () => {
+        bindModernConfig()
+      }) as () => void)
+      bindModernConfig()
+      return
     }
-    legacy.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
-      setSource(source: () => Config) { sources.cn = source; current = merged },
-      onChange: repointStores,
-    })
-    legacy.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
-      setSource(source: () => Config) { sources.ai = source; current = merged },
-      onChange: repointStores,
-    })
-    // No install-time apply here: the real 0.1.5/0.1.6 `installSection` fires
-    // `onChange()` once synchronously at install (dsh-settings 0.1.6 calls it
-    // unconditionally right after `setSource`), so a restored preference
-    // already reaches `repointStores` through that first notification.
-    // Calling it again would only repeat the work.
-    setMaximumContextWindow = async enabled => {
-      await legacy.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
-      return { state: 'updated' }
-    }
+
+    ctx.logger.warn('dsh-workbuddy-connect: host settings service has no installSection or SettingsForms API; per-variant settings and the maximum-context preference are unavailable')
   })
 
   ctx.effect(() => () => {

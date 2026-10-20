@@ -11,7 +11,7 @@ export default defineConfig({
     __DSH_WORKBUDDY_VERSION__: JSON.stringify(PACKAGE_VERSION),
   },
   test: {
-    include: ['tests/**/*.spec.ts', 'tests/**/*.spec.tsx'],
+    include: ['tests/**/*.spec.ts'],
     environment: 'node',
   },
 })

@@ -62,13 +62,6 @@ export interface WorkBuddyProbeRouteOptions {
    */
   setModelVisibility?: (modelId: string, visible: boolean, expectedAccount: string) => Promise<{ state: string; reason?: string }>
   /**
-   * Persist and apply the composer credit quick-view preference. It is a
-   * bundle-level config write (one switch for both variants), so the host
-   * wires the same setter on every variant's route; the detail-page section
-   * posts it to whichever variant's document it rendered from.
-   */
-  setBalanceQuickView?: (enabled: boolean) => Promise<{ state: string; reason?: string }>
-  /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
    */
@@ -127,11 +120,6 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
   if (action === 'set-maximum-context-window') {
     return typeof wrapped['enabled'] === 'boolean'
       ? { action: 'set-maximum-context-window', enabled: wrapped['enabled'] }
-      : undefined
-  }
-  if (action === 'set-balance-quick-view') {
-    return typeof wrapped['enabled'] === 'boolean'
-      ? { action: 'set-balance-quick-view', enabled: wrapped['enabled'] }
       : undefined
   }
   if (action === 'set-model-visibility') {
@@ -204,14 +192,6 @@ export function workBuddyProbeHandler(
           return
         }
         json(res, 200, await deps.setMaximumContextWindow(action.enabled === true))
-        return
-      }
-      if (action.action === 'set-balance-quick-view') {
-        if (deps.setBalanceQuickView === undefined) {
-          json(res, 404, { error: 'balance-quick-view-setting-not-supported' })
-          return
-        }
-        json(res, 200, await deps.setBalanceQuickView(action.enabled === true))
         return
       }
       if (action.action === 'set-model-visibility') {
